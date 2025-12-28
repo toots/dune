@@ -646,6 +646,7 @@ module Builder = struct
     ; allow_builds : bool
     ; default_root_is_cwd : bool
     ; log_file : Log.File.t
+    ; target_exec : string option
     }
 
   let root t = t.root
@@ -866,6 +867,15 @@ module Builder = struct
         value
         & opt (some Arg.context_name) None
         & info [ "x" ] ~docs ~doc:(Some "Cross-compile using this toolchain."))
+    and+ target_exec =
+      let doc =
+        "Wrapper command for running target binaries when cross-compiling. Format: \
+         TOOLCHAIN=CMD (e.g., 'windows=wine')."
+      in
+      Arg.(
+        value
+        & opt (some string) None
+        & info [ "target-exec" ] ~docs ~docv:"TOOLCHAIN=CMD" ~doc:(Some doc))
     and+ build_dir =
       let doc = "Specified build directory. _build if unspecified" in
       Arg.(
@@ -1068,6 +1078,7 @@ module Builder = struct
     ; allow_builds = true
     ; default_root_is_cwd = false
     ; log_file = Default
+    ; target_exec
     }
   ;;
 
@@ -1113,6 +1124,7 @@ module Builder = struct
         ; allow_builds
         ; default_root_is_cwd
         ; log_file
+        ; target_exec
         }
     =
     Bool.equal t.debug_dep_path debug_dep_path
@@ -1153,6 +1165,7 @@ module Builder = struct
     && Bool.equal t.allow_builds allow_builds
     && Bool.equal t.default_root_is_cwd default_root_is_cwd
     && Log.File.equal t.log_file log_file
+    && Option.equal String.equal t.target_exec target_exec
   ;;
 end
 
@@ -1405,6 +1418,23 @@ let init_with_root ~(root : Workspace_root.t) (builder : Builder.t) =
    := match config.cache_enabled with
       | Disabled | Enabled_except_user_rules -> false
       | Enabled -> true);
+  (* Parse and set target_exec *)
+  (match c.builder.target_exec with
+   | None -> Dune_engine.Clflags.target_exec := None
+   | Some spec ->
+     let toolchain, wrapper_cmd =
+       match String.lsplit2 spec ~on:'=' with
+       | Some (tc, cmd) -> tc, cmd
+       | None -> User_error.raise [ Pp.textf "--target-exec: invalid format" ]
+     in
+     let parts =
+       String.split wrapper_cmd ~on:' '
+       |> List.filter ~f:(fun s -> not (String.is_empty s))
+     in
+     (match parts with
+      | [] ->
+        User_error.raise [ Pp.textf "--target-exec: wrapper command cannot be empty" ]
+      | prog :: args -> Dune_engine.Clflags.target_exec := Some (toolchain, prog, args)));
   Log.info
     [ Pp.textf
         "Workspace root: %s"
